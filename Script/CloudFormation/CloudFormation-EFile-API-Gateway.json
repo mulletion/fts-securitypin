@@ -1,0 +1,270 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Description": "AWS CloudFormation For APIGateway to Put EFile",
+    "Parameters": {
+      "APIGatewayName": {
+        "Type": "String",
+        "Default": "testrestApiName"
+      },
+      "APIGatewayState":{
+          "Type": "String",
+          "Default": "DevStage"
+      },
+      "S3BucketName":{
+        "Type": "String",
+        "Default": "S3bucketName"
+      }
+    },
+    "Resources": {
+      
+      "PutEFileApi": {
+        "Type": "AWS::ApiGateway::RestApi",
+        "Properties": {
+          "Name": {"Ref":"APIGatewayName"},
+          "Description": "API used for Upload EFile",
+          "FailOnWarnings": true
+        }
+      },
+      "S3BucketEfile": {
+        "Type": "AWS::S3::Bucket",
+        "Properties": {
+            "AccessControl":"BucketOwnerFullControl",
+            "PublicAccessBlockConfiguration":{
+                              "BlockPublicAcls" : true,
+                              "BlockPublicPolicy" : true,
+                              "IgnorePublicAcls" : true,
+                              "RestrictPublicBuckets" : true
+                            },
+            "BucketName":{"Ref":"S3BucketName"},
+            "Tags":[
+                        {
+                            "Key":"Owner",
+                            "Value":"Phanthatana"
+                        },
+                        {
+                            "Key":"Customer",
+                            "Value":"testCustomer"
+                        }
+                 ]
+        },
+        "Metadata": {
+            "AWS::CloudFormation::Designer": {
+                "id": "1fb98fbc-b22d-4931-a8dc-59e5a59aaf54"
+            }
+        }
+    },
+      "ApiGatewayCloudWatchLogsRole": {
+        "Type": "AWS::IAM::Role",
+        "Properties": {
+          "AssumeRolePolicyDocument": {
+            "Version": "2012-10-17",
+            "Statement": [{
+              "Effect": "Allow",
+              "Principal": { "Service": ["apigateway.amazonaws.com"] },
+              "Action": ["sts:AssumeRole"]
+            }]
+          },
+          "Policies": [{
+            "PolicyName": "ApiGatewayLogsPolicy",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [{
+                "Effect": "Allow",
+                "Action": [
+                  "logs:CreateLogGroup",
+                  "logs:CreateLogStream",
+                  "logs:DescribeLogGroups",
+                  "logs:DescribeLogStreams",
+                  "logs:PutLogEvents",
+                  "logs:GetLogEvents",
+                  "logs:FilterLogEvents"
+                ],
+                "Resource": "*"
+              }]
+            }
+          }]
+        }
+      },
+      "ApiGatewayPutS3EFileRole": {
+        "DependsOn" : ["S3BucketEfile"],
+        "Type": "AWS::IAM::Role",
+        "Properties": {
+          "AssumeRolePolicyDocument": {
+            "Version": "2012-10-17",
+            "Statement": [{
+              "Effect": "Allow",
+              "Principal": { "Service": ["apigateway.amazonaws.com"] },
+              "Action": ["sts:AssumeRole"]
+            }]
+          },
+          "Policies": [{
+            "PolicyName": "ApiGatewayPutS3EFilePolicy",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [{
+                "Effect": "Allow",
+                "Action": [
+                  "s3:PutObject"
+                ],
+                "Resource": {
+                  "Fn::Join": ["",[{"Fn::GetAtt": ["S3BucketEfile", "Arn"]},"/*"]]
+                }
+              }]
+            }
+          }]
+        }
+      },
+      "ApiGatewayAccount": {
+        "Type": "AWS::ApiGateway::Account",
+        "Properties": {
+          "CloudWatchRoleArn": {"Fn::GetAtt": ["ApiGatewayCloudWatchLogsRole", "Arn"] }
+        }
+      },
+  
+      "GreetingApiStage": {
+        "DependsOn": ["ApiGatewayAccount"],
+        "Type": "AWS::ApiGateway::Stage",
+        "Properties": {
+          "DeploymentId": {"Ref": "ApiDeployment"},
+          "MethodSettings": [{
+            "DataTraceEnabled": true,
+            "HttpMethod": "*",
+            "LoggingLevel": "INFO",
+            "ResourcePath": "/*"
+          }],
+          "RestApiId": {"Ref": "PutEFileApi"},
+          "StageName": "LATEST"
+        }
+      },
+  
+      "ApiDeployment": {
+        "Type": "AWS::ApiGateway::Deployment",
+        "DependsOn": ["PutEFileRequest"],
+        "Properties": {
+          "RestApiId": {"Ref": "PutEFileApi"},
+          "StageName": {"Ref":"APIGatewayState"}
+        }
+      },
+  
+      "EFileResource": {
+        "Type": "AWS::ApiGateway::Resource",
+        "Properties": {
+          "RestApiId": {"Ref": "PutEFileApi"},
+          "ParentId": {"Fn::GetAtt": ["PutEFileApi", "RootResourceId"]},
+          "PathPart": "efile"
+        }
+      },
+      "EFileObjectResource": {
+        "Type": "AWS::ApiGateway::Resource",
+        "Properties": {
+          "RestApiId": {"Ref": "PutEFileApi"},
+          "ParentId": {"Ref": "EFileResource"},
+          "PathPart": "{item}"
+        }
+      },
+      "PutEFileRequest": {
+        "Type": "AWS::ApiGateway::Method",
+        "Properties": {
+          "ApiKeyRequired": true,
+          "AuthorizationType": "NONE",
+          "HttpMethod": "PUT",
+          "Integration": {
+            "Type": "AWS",
+            "Credentials":{"Fn::GetAtt": ["ApiGatewayPutS3EFileRole", "Arn"]},
+            "IntegrationHttpMethod": "PUT",
+            "IntegrationResponses": [{
+              "ResponseTemplates":{"application/json":"Upload Complete"},
+                "StatusCode": 200
+              }],
+            "Uri": {
+                "Fn::Join": ["", ["arn:aws:apigateway:", {"Ref": "AWS::Region"}, ":s3:path/", {"Ref":"S3BucketEfile"}, "/{object}"]]
+            },
+            "RequestParameters": {
+              "integration.request.path.object":"method.request.path.item"
+            }
+          },
+          "RequestParameters": {
+            "method.request.path.item":true
+          },
+          "ResourceId": {"Ref": "EFileObjectResource"},
+          "RestApiId": {"Ref": "PutEFileApi"},
+          "MethodResponses": [{
+            "ResponseModels" : { "application/json":{"Ref":"ResponsePutEFileModel"} },
+            "StatusCode": 200
+          }]
+
+
+        }
+      },
+      "EFileAPIKey":{
+        "DependsOn" : ["ApiDeployment"],
+        "Type" : "AWS::ApiGateway::ApiKey",
+        "Properties" : {
+          "Description" : "API Key For EFile Generate From CloudFormation",
+          "Enabled" : true,
+          "Name" : "fts-securitypin-apikeyfromcloudformation01-dev-aws-apikey",
+          "StageKeys": [{
+            "RestApiId": { "Ref": "PutEFileApi" },
+            "StageName": {"Ref":"APIGatewayState"}
+          }]
+        }
+      },
+      "EFileUsagePlan":{
+        "DependsOn" : ["EFileAPIKey"],
+        "Type" : "AWS::ApiGateway::UsagePlan",
+        "Properties" : {
+            "ApiStages" : [ 
+                {
+                    "ApiId" : {"Ref": "PutEFileApi"},
+                    "Stage" : {"Ref":"APIGatewayState"}
+                  }
+             ],
+            "Description" : "Usage Plan For EFile from Cloud Formation",
+            "Quota" :{
+                "Limit" : 10,
+                "Period" : "DAY"
+              },
+              "Throttle" : {
+                "BurstLimit" : 2,
+                "RateLimit" : 1
+              },
+            "UsagePlanName" : "fts-securitypin-usageplan-fromcloudformation-usageplan"
+          }
+      },
+      "EFileUsagePlanKey" : {
+        "DependsOn" : ["EFileUsagePlan"],
+        "Type": "AWS::ApiGateway::UsagePlanKey",
+        "Properties": {
+          "KeyId" : {"Ref" : "EFileAPIKey"},
+          "KeyType" : "API_KEY",
+          "UsagePlanId" : {"Ref" : "EFileUsagePlan"}
+        }
+      },
+      "ResponsePutEFileModel": {
+        "Type": "AWS::ApiGateway::Model",
+        "Properties": {
+          "RestApiId": { "Ref": "PutEFileApi" },
+          "ContentType": "application/json",
+          "Description": "Schema for Put EFile example",
+          "Name": "ResponseForPutEFileModel",
+          "Schema": {
+            "$schema" : "http://json-schema.org/draft-04/schema#",
+            "title" : "Response Put EFile Schema",
+            "type" : "object",
+            "properties" : {
+              "message" : { "type" : "string" }
+            }
+          }
+        }
+      }
+
+    },
+    
+    "Outputs": {
+      "RootUrl": {
+        "Description": "Root URL of the API gateway",
+        "Value": {"Fn::Join": ["", ["https://", {"Ref": "PutEFileApi"}, ".execute-api.", {"Ref": "AWS::Region"}, ".amazonaws.com/",{"Ref":"APIGatewayState"}]]}
+      }
+    }
+    
+  }
